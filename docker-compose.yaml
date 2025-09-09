@@ -283,18 +283,6 @@ services:
       - --use-auth-secret
       - --static-auth-secret=${TURN_STATIC_AUTH_SECRET}
 
-  duckdns:
-    image: lscr.io/linuxserver/duckdns:latest
-    container_name: duckdns
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Etc/UTC
-      - SUBDOMAINS=your-duckdns-subdomain
-      - TOKEN=your-duckdns-token
-      - UPDATE_IP=ipv4
-    restart: unless-stopped
-
 networks:
   default:
     external: false
