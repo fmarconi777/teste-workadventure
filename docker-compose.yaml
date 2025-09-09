@@ -1,0 +1,300 @@
+version: "3.6"
+services:
+  reverse-proxy:
+    image: traefik:v2.11
+    container_name: traefik
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - "CF_API_EMAIL=${ACME_EMAIL}"
+    command:
+      - --api.dashboard=true
+      - --providers.docker
+      - --entryPoints.web.address=:80
+      - --entryPoints.websecure.address=:443
+      - --providers.docker.exposedbydefault=false
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=acme.json
+      - --entryPoints.web.http.redirections.entryPoint.to=websecure
+      - --entryPoints.web.http.redirections.entryPoint.scheme=https
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.middlewares=traefik-auth"
+      - "traefik.http.routers.traefik.entryPoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_USER}:${TRAEFIK_PASSWORD_HASH}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      -./acme.json:/acme.json
+    networks:
+      default:
+        aliases:
+          - "front.${DOMAIN}"
+          - "play.${DOMAIN}"
+          - "room-api.${DOMAIN}"
+          - "maps.${DOMAIN}"
+          - "oidc.${DOMAIN}"
+          - "map-storage.${DOMAIN}"
+          - "xmpp.${DOMAIN}"
+          - "matrix.${DOMAIN}"
+          - "pusher.${DOMAIN}"
+          - "meet.${DOMAIN}"
+          - "coturn.${DOMAIN}"
+  
+  play:
+    image: thecodingmachine/nodejs:v2-20-bullseye
+    working_dir: /usr/src/app/play
+    volumes:
+      -./play:/usr/src/app/play
+    environment:
+      STARTUP_COMMAND_1:../wait-proto.sh
+      STARTUP_COMMAND_2:../npm-install.sh
+      STARTUP_COMMAND_3: npm run typesafe-i18n
+      DEBUG: "socket,space"
+      DEBUG_COLORS: "true"
+      DEBUG_ERROR_MESSAGES: "true"
+      JITSI_URL: $JITSI_URL
+      HOST: "0.0.0.0"
+      NODE_ENV: development
+      ALLOWED_CORS_ORIGIN: "https://play.${DOMAIN}"
+      VITE_URL: "https://front.${DOMAIN}"
+      PUSHER_URL: https://play.${DOMAIN}
+      FRONT_URL: https://play.${DOMAIN}
+      UPLOADER_URL: https://uploader.${DOMAIN}
+      ICON_URL: https://icon.${DOMAIN}
+      STUN_SERVER: $STUN_SERVER
+      TURN_SERVER: $TURN_SERVER
+      SECRET_KEY: "${SECRET_KEY}"
+      MAP_STORAGE_API_TOKEN: "${MAP_STORAGE_API_TOKEN}"
+      API_URL: back:50051
+      PUBLIC_MAP_STORAGE_URL: "https://map-storage.${DOMAIN}"
+      INTERNAL_MAP_STORAGE_URL: "http://map-storage:3000"
+      ROOM_API_SECRET_KEY: ${ROOM_API_SECRET_KEY}
+      JITSI_DOMAIN: "$JITSI_DOMAIN"
+      JITSI_MUC_DOMAIN: "$JITSI_MUC_DOMAIN"
+      JITSI_XMPP_DOMAIN: "$JITSI_XMPP_DOMAIN"
+      MATRIX_API_URI: http://synapse:8008/
+      MATRIX_PUBLIC_URI: https://matrix.${DOMAIN}
+      MATRIX_ADMIN_USER: ${MATRIX_ADMIN_USER}
+      MATRIX_ADMIN_PASSWORD: ${MATRIX_ADMIN_PASSWORD}
+      MATRIX_DOMAIN: matrix.${DOMAIN}
+      EMBEDLY_KEY: "$EMBEDLY_KEY"
+      IFRAMELY_KEY: "$IFRAMELY_KEY"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.front.rule=Host(`front.${DOMAIN}`)"
+      - "traefik.http.routers.front.entryPoints=websecure"
+      - "traefik.http.routers.front.tls.certresolver=letsencrypt"
+      - "traefik.http.services.front.loadbalancer.server.port=8080"
+      - "traefik.http.routers.room-api.rule=Host(`room-api.${DOMAIN}`)"
+      - "traefik.http.routers.room-api.entryPoints=websecure"
+      - "traefik.http.routers.room-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.room-api.loadbalancer.server.port=50051"
+      - "traefik.http.services.room-api.loadbalancer.server.scheme=h2c"
+      - "traefik.http.routers.play.rule=Host(`play.${DOMAIN}`)"
+      - "traefik.http.routers.play.entryPoints=websecure"
+      - "traefik.http.routers.play.tls.certresolver=letsencrypt"
+      - "traefik.http.services.play.loadbalancer.server.port=3000"
+      - "traefik.http.routers.play-ws.rule=Host(`play.${DOMAIN}`) && PathPrefix(`/ws/`)"
+      - "traefik.http.routers.play-ws.entryPoints=websecure"
+      - "traefik.http.routers.play-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.services.play-ws.loadbalancer.server.port=3001"
+
+  maps:
+    image: thecodingmachine/php:8.1-v4-apache-node12
+    volumes:
+      -./maps:/var/www/html
+    environment:
+      FRONT_URL: https://play.${DOMAIN}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.maps.rule=Host(`maps.${DOMAIN}`)"
+      - "traefik.http.routers.maps.entryPoints=websecure"
+      - "traefik.http.routers.maps.tls.certresolver=letsencrypt"
+      - "traefik.http.services.maps.loadbalancer.server.port=80"
+
+  back:
+    image: thecodingmachine/nodejs:v2-22-bullseye
+    working_dir: /usr/src/app/back
+    environment:
+      SECRET_KEY: "${SECRET_KEY}"
+      SECRET_JITSI_KEY: "${SECRET_JITSI_KEY}"
+      JITSI_ISS: "${JITSI_ISS}"
+      JITSI_URL: $JITSI_URL
+      TURN_STATIC_AUTH_SECRET: "${TURN_STATIC_AUTH_SECRET}"
+      REDIS_HOST: redis
+      MAP_STORAGE_URL: "map-storage:50053"
+      PUBLIC_MAP_STORAGE_URL: "https://map-storage.${DOMAIN}"
+      INTERNAL_MAP_STORAGE_URL: "http://map-storage:3000"
+      NODE_ENV: development
+      ENABLE_CHAT: "true"
+      PLAY_URL: "https://play.${DOMAIN}"
+    volumes:
+      -./back:/usr/src/app/back
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.back.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.routers.back.entryPoints=websecure"
+      - "traefik.http.routers.back.tls.certresolver=letsencrypt"
+      - "traefik.http.services.back.loadbalancer.server.port=8080"
+  
+  map-storage:
+    image: thecodingmachine/nodejs:v2-22-bullseye
+    working_dir: /usr/src/app/map-storage
+    environment:
+      MAP_STORAGE_API_TOKEN: "${MAP_STORAGE_API_TOKEN}"
+      SECRET_KEY: "${SECRET_KEY}"
+      PUSHER_URL: "https://play.${DOMAIN}"
+      NODE_ENV: development
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.map-storage.rule=Host(`map-storage.${DOMAIN}`)"
+      - "traefik.http.routers.map-storage.entryPoints=websecure"
+      - "traefik.http.routers.map-storage.tls.certresolver=letsencrypt"
+      - "traefik.http.services.map-storage.loadbalancer.server.port=3000"
+      - "traefik.http.routers.map-storage-ui.rule=Host(`map-storage.${DOMAIN}`) && PathPrefix(`/ui/`)"
+      - "traefik.http.routers.map-storage-ui.entryPoints=websecure"
+      - "traefik.http.routers.map-storage-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.services.map-storage-ui.loadbalancer.server.port=8080"
+
+  uploader:
+    image: thecodingmachine/nodejs:v2-20-bullseye
+    working_dir: /usr/src/app/uploader
+    environment:
+      UPLOADER_URL: "https://uploader.${DOMAIN}"
+      REDIS_HOST: "redis"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.uploader.rule=Host(`uploader.${DOMAIN}`)"
+      - "traefik.http.routers.uploader.entryPoints=websecure"
+      - "traefik.http.routers.uploader.tls.certresolver=letsencrypt"
+      - "traefik.http.services.uploader.loadbalancer.server.port=8080"
+
+  icon:
+    image: matthiasluedtke/iconserver:v3.15.0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.icon.rule=Host(`icon.${DOMAIN}`)"
+      - "traefik.http.routers.icon.entryPoints=websecure"
+      - "traefik.http.routers.icon.tls.certresolver=letsencrypt"
+      - "traefik.http.services.icon.loadbalancer.server.port=8080"
+
+  redis:
+    image: redis:6
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    environment:
+      SYNAPSE_SERVER_NAME: matrix.${DOMAIN}
+      SYNAPSE_REPORT_STATS: yes
+      MATRIX_ADMIN_USER: ${MATRIX_ADMIN_USER}
+      MATRIX_ADMIN_PASSWORD: ${MATRIX_ADMIN_PASSWORD}
+    volumes:
+      -./synapse-data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.matrix.rule=Host(`matrix.${DOMAIN}`)"
+      - "traefik.http.routers.matrix.entryPoints=websecure"
+      - "traefik.http.routers.matrix.tls.certresolver=letsencrypt"
+      - "traefik.http.services.matrix.loadbalancer.server.port=8008"
+
+  prosody:
+    image: jitsi/prosody:stable
+    container_name: prosody
+    environment:
+      JITSI_DOMAIN: ${DOMAIN}
+      JITSI_MEET_SECRET: ${SECRET_JITSI_KEY}
+    networks:
+      - default
+
+  jicofo:
+    image: jitsi/jicofo:stable
+    container_name: jicofo
+    depends_on:
+      - prosody
+    environment:
+      JITSI_DOMAIN: ${DOMAIN}
+      JITSI_MEET_SECRET: ${SECRET_JITSI_KEY}
+      JICOFO_COMPONENT_SECRET: ${SECRET_JITSI_KEY}
+    networks:
+      - default
+
+  jvb:
+    image: jitsi/jvb:stable
+    container_name: jvb
+    depends_on:
+      - prosody
+    networks:
+      - default
+    ports:
+      - "10000:10000/udp"
+    environment:
+      JITSI_DOMAIN: ${DOMAIN}
+      JICOFO_COMPONENT_SECRET: ${SECRET_JITSI_KEY}
+      DOCKER_HOST_ADDRESS: "${DOMAIN}"
+      JVB_AUTH_USER: jvb
+      JVB_AUTH_PASSWORD: ${SECRET_JITSI_KEY}
+      JVB_ADVERTISE_IPS: ${DOMAIN}
+
+  jitsi_web:
+    image: jitsi/web:stable
+    container_name: jitsi_web
+    depends_on:
+      - prosody
+      - jicofo
+      - jvb
+    networks:
+      - default
+    ports:
+      - "8443:443"
+    environment:
+      JITSI_DOMAIN: ${DOMAIN}
+      PUBLIC_URL: https://${DOMAIN}
+      ENABLE_LETSENCRYPT: "0" # O Traefik lida com os certificados
+      JICOFO_COMPONENT_SECRET: ${SECRET_JITSI_KEY}
+      JITSI_XMPP_DOMAIN: "meet.${DOMAIN}"
+      JITSI_MUC_DOMAIN: "muc.meet.${DOMAIN}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jitsi_web.rule=Host(`meet.${DOMAIN}`)"
+      - "traefik.http.routers.jitsi_web.entryPoints=websecure"
+      - "traefik.http.routers.jitsi_web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jitsi_web.loadbalancer.server.port=443"
+
+  coturn:
+    image: coturn/coturn:4.5.2
+    container_name: coturn
+    network_mode: host
+    command:
+      - turnserver
+      - --log-file=stdout
+      - --listening-port=3478
+      - --min-port=10000
+      - --max-port=20000
+      - --tls-listening-port=5349
+      - --listening-ip=0.0.0.0
+      - --realm=${DOMAIN}
+      - --fingerprint
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_STATIC_AUTH_SECRET}
+
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: duckdns
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - SUBDOMAINS=your-duckdns-subdomain
+      - TOKEN=your-duckdns-token
+      - UPDATE_IP=ipv4
+    restart: unless-stopped
+
+networks:
+  default:
+    external: false
